@@ -32,7 +32,12 @@ UPDATE_PACKAGE() {
 	done
 
 	# 克隆 GitHub 仓库
-	git clone --depth=1 --single-branch --branch $PKG_BRANCH "https://github.com/$PKG_REPO.git" $REPO_PATH
+	# 克隆失败必须直接终止，否则后续 make defconfig 会静默丢掉这个插件，
+	# 编出一个“看起来成功”但缺功能的固件。
+	if ! git clone --depth=1 --single-branch --branch "$PKG_BRANCH" "https://github.com/$PKG_REPO.git" "$REPO_PATH"; then
+		echo "ERROR: clone failed: $PKG_REPO ($PKG_BRANCH)"
+		exit 1
+	fi
 
 	# 处理克隆的仓库
 	if [[ "$PKG_SPECIAL" == "pkg" ]]; then

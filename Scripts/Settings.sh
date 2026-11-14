@@ -8,8 +8,6 @@ find ./feeds/luci/collections/ -type f -name "Makefile" -exec sed -i "/attendeds
 find ./feeds/luci/collections/ -type f -name "Makefile" -exec sed -i "s/luci-theme-bootstrap/luci-theme-$WRT_THEME/g" {} +
 #修改immortalwrt.lan关联IP
 find ./feeds/luci/modules/luci-mod-system/ -type f -name "flash.js" -exec sed -i "s/192\.168\.[0-9]*\.[0-9]*/$WRT_IP/g" {} +
-#添加编译日期标识
-find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" -exec sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ $WRT_MARK-$WRT_DATE')/g" {} +
 #固件版本行只显示自定义版本号（不再拼接 LuCI 版本号与编译日期）
 find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" -exec sed -i "s|_('Firmware Version'),.*|_('Firmware Version'), (L.isObject(boardinfo.release) ? boardinfo.release.description : ''),|" {} +
 #修改内核版本号（LuCI 状态-概览里显示的"内核版本"，仅改显示，uname -r 仍为真实内核）
@@ -25,24 +23,37 @@ done
 
 WIFI_UC="./package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc"
 if [ -f "$WIFI_UC" ]; then
-	#修改WIFI名称
-	sed -i "s/ssid='.*'/ssid='$WRT_SSID'/g" $WIFI_UC
+	#修改WIFI名称（用 | 作分隔符，SSID 里含 / 也不会破坏 sed）
+	sed -i "s|ssid='.*'|ssid='$WRT_SSID'|g" $WIFI_UC
 	#修改WIFI密码
-	sed -i "s/key='.*'/key='$WRT_WORD'/g" $WIFI_UC
+	sed -i "s|key='.*'|key='$WRT_WORD'|g" $WIFI_UC
 fi
 
 CFG_FILE="./package/base-files/files/bin/config_generate"
+[ -f "$CFG_FILE" ] || { echo "ERROR: $CFG_FILE not found"; exit 1; }
 #修改默认IP地址（immortalwrt 的 LAN 默认网段是 10.10.10.1，不是 192.168.x.x，需单独替换）
 sed -i "s/192\.168\.[0-9]*\.[0-9]*/$WRT_IP/g" $CFG_FILE
 sed -i "/lan) ipad=/s/\"[0-9.]*\"/\"$WRT_IP\"/" $CFG_FILE
 #修改默认主机名
 sed -i "s/hostname='.*'/hostname='$WRT_NAME'/g" $CFG_FILE
 
-#默认启用IPv6（LAN 下发 DHCPv6；RA 本来就是 server）
-DHCP_CONF="./package/network/services/dnsmasq/files/dhcp.conf"
-if [ -f "$DHCP_CONF" ]; then
-	sed -i "/config dhcp lan/,/^\$/ s/option dhcpv6.*/option dhcpv6\tserver/" "$DHCP_CONF"
-fi
+#默认启用IPv6（odhcpd 负责 RA 与 DHCPv6）
+#注意：odhcpd 自带的 /etc/uci-defaults/15_odhcpd 在首次启动时会把 dhcp.lan.dhcpv6 写回 disabled，
+#直接改 feeds 里的 dhcp.conf 模板会被它覆盖，所以这里放一个编号更大的脚本，在它之后执行。
+UCI_DEF_DIR="./package/base-files/files/etc/uci-defaults"
+mkdir -p "$UCI_DEF_DIR"
+cat > "$UCI_DEF_DIR/99-custom-ipv6" <<'EOF'
+#!/bin/sh
+# LP: 默认开启 IPv6。RA 负责 SLAAC 地址，DHCPv6 负责下发地址与 DNS。
+[ -e /proc/sys/net/ipv6 ] || exit 0
+
+uci -q set dhcp.lan.ra='server'
+uci -q set dhcp.lan.ra_slaac='1'
+uci -q set dhcp.lan.dhcpv6='server'
+uci -q commit dhcp
+exit 0
+EOF
+chmod +x "$UCI_DEF_DIR/99-custom-ipv6"
 
 #默认启用UPnP（含IPv6 pinhole）
 UPNP_CONF="./feeds/packages/net/miniupnpd/files/upnpd.config"

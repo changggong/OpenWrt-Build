@@ -21,7 +21,9 @@ jobs:
         with:
           gh_token: ${{secrets.GITHUB_TOKEN}}
           delete_releases: true
-          releases_keep_latest: 0
+          #保留最近 3 个固件；原配置是 0，等于每天把刚发的固件全删掉
+          releases_keep_latest: 3
           delete_tags: true
           delete_workflows: true
-          workflows_keep_day: 0
+          #保留最近 7 天的运行记录，便于事后查日志；原配置是 0，等于全删
+          workflows_keep_day: 7
