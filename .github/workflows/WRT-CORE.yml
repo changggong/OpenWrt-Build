@@ -195,13 +195,33 @@ jobs:
 
       - name: Compile Firmware
         if: ${{ !inputs.WRT_TEST }}
+        # 冷编（无缓存）实测 6.5h 以上，会撞 GitHub 单 job 6 小时上限，
+        # 被硬取消后缓存来不及保存，形成"永远编不完"的死锁。
+        # 这里给编译 4h50m 上限，超时就带着已完成的工具链缓存正常收尾，
+        # 下一次运行直接复用缓存继续编。
+        timeout-minutes: 300
+        continue-on-error: true
         run: |
           cd ./wrt/
 
           make -j$(nproc) || make -j1 V=s
 
+      - name: Check Build Output
+        id: build-output
+        if: ${{ !inputs.WRT_TEST }}
+        run: |
+          if compgen -G "./wrt/bin/targets/*/*/*sysupgrade.bin" > /dev/null; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+            echo "固件已生成"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo "本次未编完，缓存已保存，再跑一次会接着编"
+          fi
+
       - name: Save Build Cache
         if: ${{ !inputs.WRT_TEST && success() && steps.cache-restore.outputs.cache-hit != 'true' }}
+        # 缓存 key 已存在时 save 会报错，不能因此判整个 job 失败
+        continue-on-error: true
         uses: actions/cache/save@main
         with:
           key: ${{env.WRT_CACHE_KEY}}
@@ -223,6 +243,7 @@ jobs:
           echo "======================="
 
       - name: Package Firmware
+        if: ${{ inputs.WRT_TEST || steps.build-output.outputs.complete == 'true' }}
         run: |
           cd ./wrt/ && mkdir ./upload/
 
@@ -247,6 +268,7 @@ jobs:
           fi
 
       - name: Release Firmware
+        if: ${{ inputs.WRT_TEST || steps.build-output.outputs.complete == 'true' }}
         uses: softprops/action-gh-release@master
         with:
           tag_name: ${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_BRANCH}}-${{env.WRT_DATE}}
@@ -273,6 +295,13 @@ jobs:
 
             内核版本：${{env.WRT_KVER}}
             插件列表：${{env.WRT_LIST}}
+
+      - name: Report Incomplete Build
+        # 没编出固件就是失败，但缓存已经存好，再跑一次能接着编
+        if: ${{ !inputs.WRT_TEST && steps.build-output.outputs.complete != 'true' }}
+        run: |
+          echo "::error::本次编译没有产出固件（超时或报错），工具链缓存已保存。重新运行同一 workflow 会复用缓存继续编译。"
+          exit 1
 
   cache-rollover:
     name: Roll cache generations
