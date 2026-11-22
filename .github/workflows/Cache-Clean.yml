@@ -4,9 +4,11 @@
 name: Cache-Clean
 
 on:
-  #自动清理：每周一早上4点
+  #自动清理：每月2日凌晨4点（CST）
+  #原来是每周一次，但缓存只有约 1.1GB，清空后下一次编译要冷编 5 小时，
+  #而且第一次还编不完，等于每月多浪费一次完整构建。
   schedule:
-    - cron: 0 20 * * 0
+    - cron: 0 20 1 * *
   #手动清理
   workflow_dispatch:
 
@@ -20,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Projects
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: Cache Clean
         run: gh cache delete --all

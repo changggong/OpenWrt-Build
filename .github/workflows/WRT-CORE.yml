@@ -69,7 +69,8 @@ jobs:
       cache_key: ${{steps.clone-code.outputs.cache_key}}
     steps:
       - name: Checkout Projects
-        uses: actions/checkout@main
+        #钉住主版本，避免上游 main 的 breaking change 或供应链投毒直接炸掉流水线
+        uses: actions/checkout@v4
 
       - name: Initialization Environment
         env:
@@ -139,21 +140,28 @@ jobs:
       - name: Restore Build Cache
         id: cache-restore
         if: ${{ !inputs.WRT_TEST }}
-        uses: actions/cache/restore@main
+        uses: actions/cache/restore@v4
         with:
           key: ${{env.WRT_CACHE_KEY}}
           restore-keys: ${{env.WRT_CACHE_PREFIX}}-
+          #缓存工具链版本标记：上游 GCC 版本变化时，OpenWrt 靠这个文件触发工具链重建。
+          #不缓存的话每次都是全新克隆，文件为空，检查永远通过，会继续用旧工具链。
           path: |
             ./wrt/.ccache
             ./wrt/staging_dir/host*
             ./wrt/staging_dir/tool*
+            ./wrt/.toolchain_build_ver
 
       - name: Prepare Restored Build Cache
         if: ${{ !inputs.WRT_TEST && steps.cache-restore.outputs.cache-matched-key != '' }}
         run: |
-          find "./wrt/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r DIR; do
-            find "$DIR" -type f -exec touch {} +
-          done
+          #部分命中（restore-keys 前缀）时可能只有 .ccache，没有 staging_dir，
+          #此时 find 会报错；先判断目录存在。
+          if [ -d "./wrt/staging_dir" ]; then
+            find "./wrt/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r DIR; do
+              find "$DIR" -type f -exec touch {} +
+            done
+          fi
           mkdir -p ./wrt/tmp
           echo "1" > ./wrt/tmp/.build
           echo "restored build cache: ${{steps.cache-restore.outputs.cache-matched-key}}"
@@ -176,7 +184,8 @@ jobs:
         run: |
           cd ./wrt/
 
-          if [[ "${WRT_CONFIG,,}" == *"test"* ]]; then
+          #TEST 输入为真时只输出配置文件，不追加 GENERAL.txt 的插件列表
+          if [[ "$WRT_TEST" == 'true' ]]; then
             cat $GITHUB_WORKSPACE/Config/$WRT_CONFIG.txt >> .config
           else
             cat $GITHUB_WORKSPACE/Config/$WRT_CONFIG.txt $GITHUB_WORKSPACE/Config/GENERAL.txt >> .config
@@ -185,6 +194,57 @@ jobs:
           $GITHUB_WORKSPACE/Scripts/Settings.sh
 
           make defconfig -j$(nproc) && make clean -j$(nproc)
+
+      - name: Verify Config
+        #defconfig 会静默丢掉上游已改名或不存在的 CONFIG 符号。
+        #这里确认关键插件真的进了 .config，避免编出一个缺功能的固件还显示成功。
+        if: ${{ !inputs.WRT_TEST }}
+        run: |
+          cd ./wrt/
+          FAIL=0
+
+          for SYM in \
+            "CONFIG_PACKAGE_luci-theme-$WRT_THEME" \
+            CONFIG_PACKAGE_luci-app-passwall \
+            CONFIG_PACKAGE_luci-app-homeproxy \
+            CONFIG_PACKAGE_luci-app-nikki \
+            CONFIG_PACKAGE_luci-app-daede \
+            CONFIG_PACKAGE_dae \
+            CONFIG_PACKAGE_daed \
+            CONFIG_DAE_USE_VMLINUX_BTF \
+            CONFIG_DAED_USE_VMLINUX_BTF \
+            CONFIG_PACKAGE_vmlinux-btf \
+            CONFIG_PACKAGE_luci-app-bandix \
+            CONFIG_PACKAGE_luci-app-easytier \
+            CONFIG_PACKAGE_luci-app-lucky \
+            CONFIG_PACKAGE_luci-app-taskplan \
+            CONFIG_PACKAGE_luci-app-upnp \
+            CONFIG_PACKAGE_luci-app-natmapt \
+            CONFIG_PACKAGE_luci-app-wolultra \
+            CONFIG_PACKAGE_odhcpd-ipv6only \
+            CONFIG_IPV6
+          do
+            if grep -q "^$SYM=y" .config; then
+              echo "[config] OK   $SYM=y"
+            else
+              echo "[config] FAIL $SYM=y 不在 .config 里"
+              FAIL=1
+            fi
+          done
+
+          for SYM in luci-app-autoreboot luci-app-partexp luci-app-mini-diskmanager; do
+            if grep -q "^CONFIG_PACKAGE_$SYM=y" .config; then
+              echo "[config] FAIL $SYM 应为 n，实际为 y"
+              FAIL=1
+            else
+              echo "[config] OK   $SYM 未启用"
+            fi
+          done
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "ERROR: .config 与预期不符，可能上游改了包名或依赖。"
+            exit 1
+          fi
 
       - name: Download Packages
         if: ${{ !inputs.WRT_TEST }}
@@ -210,11 +270,28 @@ jobs:
         id: build-output
         if: ${{ !inputs.WRT_TEST }}
         run: |
-          if compgen -G "./wrt/bin/targets/*/*/*sysupgrade.bin" > /dev/null; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
-            echo "固件已生成"
+          cd ./wrt/
+          IMG=$(ls bin/targets/*/*/*sysupgrade.bin 2>/dev/null | head -1)
+          COMPLETE=false
+
+          if [ -n "$IMG" ]; then
+            DIR=$(dirname "$IMG")
+            BASE=$(basename "$IMG")
+            # 编译被时限打断时可能留下写了一半的镜像，必须用 sha256sums 校验完整性，
+            # 否则会把坏固件发出去。
+            WANT=$(awk -v f="$BASE" '$2 == f || $2 == "*" f {print $1; exit}' "$DIR/sha256sums" 2>/dev/null)
+            GOT=$(sha256sum "$IMG" | awk '{print $1}')
+            if [ -n "$WANT" ] && [ "$WANT" = "$GOT" ]; then
+              COMPLETE=true
+            else
+              echo "镜像校验未通过：$BASE（可能写了一半）"
+            fi
+          fi
+
+          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+          if [ "$COMPLETE" = "true" ]; then
+            echo "固件已生成并通过 sha256 校验"
           else
-            echo "complete=false" >> "$GITHUB_OUTPUT"
             echo "本次未编完，缓存已保存，再跑一次会接着编"
           fi
 
@@ -222,13 +299,14 @@ jobs:
         if: ${{ !inputs.WRT_TEST && success() && steps.cache-restore.outputs.cache-hit != 'true' }}
         # 缓存 key 已存在时 save 会报错，不能因此判整个 job 失败
         continue-on-error: true
-        uses: actions/cache/save@main
+        uses: actions/cache/save@v4
         with:
           key: ${{env.WRT_CACHE_KEY}}
           path: |
             ./wrt/.ccache
             ./wrt/staging_dir/host*
             ./wrt/staging_dir/tool*
+            ./wrt/.toolchain_build_ver
 
       - name: Machine Information
         run: |
@@ -269,7 +347,7 @@ jobs:
 
       - name: Release Firmware
         if: ${{ inputs.WRT_TEST || steps.build-output.outputs.complete == 'true' }}
-        uses: softprops/action-gh-release@master
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_BRANCH}}-${{env.WRT_DATE}}
           files: ./wrt/upload/*.*

@@ -28,6 +28,11 @@ on:
 #CI权限
 permissions: write-all
 
+#同一分支只允许一个编译任务；连点两次时第二次排队，不会并发抢同一份缓存
+concurrency:
+  group: qca-all-${{github.ref}}
+  cancel-in-progress: false
+
 #CI任务
 jobs:
   config:

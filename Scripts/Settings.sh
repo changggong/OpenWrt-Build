@@ -11,7 +11,8 @@ find ./feeds/luci/modules/luci-mod-system/ -type f -name "flash.js" -exec sed -i
 #固件版本行只显示自定义版本号（不再拼接 LuCI 版本号与编译日期）
 find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" -exec sed -i "s|_('Firmware Version'),.*|_('Firmware Version'), (L.isObject(boardinfo.release) ? boardinfo.release.description : ''),|" {} +
 #修改内核版本号（LuCI 状态-概览里显示的"内核版本"，仅改显示，uname -r 仍为真实内核）
-find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" -exec sed -i "s|_('Kernel Version'),.*|_('Kernel Version'),   '6.6.6.6',|" {} +
+KERNEL_DISPLAY="6.6.6.6"
+find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" -exec sed -i "s|_('Kernel Version'),.*|_('Kernel Version'),   '$KERNEL_DISPLAY',|" {} +
 #修改固件版本号（LuCI 状态-概览里显示的"固件版本"，取自 board.release.description=os-release 的 OPENWRT_RELEASE）
 FW_VERSION="openwrt"
 for FW_FILE in ./package/base-files/files/etc/openwrt_release ./package/base-files/files/usr/lib/os-release; do
@@ -90,3 +91,61 @@ if [[ "${WRT_TARGET^^}" == *"QUALCOMMAX"* ]]; then
 		echo "qualcommax set up nowifi successfully!"
 	fi
 fi
+
+#关键设置自检
+#上游一旦重命名文件或改写这几行，上面的 sed 会静默失效，编出来的固件看着正常但设置全丢。
+#这里逐项确认修改真的落地，任何一项没生效就让编译直接失败。
+SELF_CHECK_FAILED=0
+check_setting() {
+	local DESC=$1
+	shift
+	if "$@"; then
+		echo "[check] OK   $DESC"
+	else
+		echo "[check] FAIL $DESC"
+		SELF_CHECK_FAILED=1
+	fi
+}
+
+SYS_JS=$(find ./feeds/luci/modules/luci-mod-status/ -type f -name "10_system.js" | head -1)
+if [ -z "$SYS_JS" ]; then
+	echo "[check] FAIL 找不到 10_system.js，LuCI 状态页可能已改结构"
+	SELF_CHECK_FAILED=1
+	SYS_JS=/dev/null
+fi
+check_setting "内核版本显示 $KERNEL_DISPLAY" \
+	grep -qF "'$KERNEL_DISPLAY'," "$SYS_JS"
+check_setting "固件版本行不拼接 LuCI 版本" \
+	grep -qF "_('Firmware Version'), (L.isObject(boardinfo.release)" "$SYS_JS"
+check_setting "固件版本号 $FW_VERSION" \
+	grep -qF "DISTRIB_DESCRIPTION='$FW_VERSION'" ./package/base-files/files/etc/openwrt_release
+check_setting "默认 IP $WRT_IP" \
+	grep -qF "\"$WRT_IP\"" "$CFG_FILE"
+check_setting "默认主机名 $WRT_NAME" \
+	grep -qF "hostname='$WRT_NAME'" "$CFG_FILE"
+check_setting "IPv6 uci-defaults 脚本可执行" \
+	test -x "$UCI_DEF_DIR/99-custom-ipv6"
+check_setting "默认主题 $WRT_THEME 已替换 bootstrap" \
+	bash -c "! grep -rq --include=Makefile 'luci-theme-bootstrap' ./feeds/luci/collections/"
+check_setting "默认主题 $WRT_THEME 已加入 collections" \
+	grep -rq --include=Makefile "luci-theme-$WRT_THEME" ./feeds/luci/collections/
+
+if [ -f "$WIFI_UC" ]; then
+	check_setting "WIFI 名称 $WRT_SSID" \
+		grep -qF "ssid='$WRT_SSID'" "$WIFI_UC"
+else
+	echo "[check] WARN $WIFI_UC 不存在，WIFI 名称/密码未修改"
+fi
+
+if [ -f "$UPNP_CONF" ]; then
+	check_setting "UPnP 默认启用" \
+		grep -qP 'option enabled\s+1' "$UPNP_CONF"
+else
+	echo "[check] WARN $UPNP_CONF 不存在，UPnP 默认值未修改"
+fi
+
+if [ "$SELF_CHECK_FAILED" -ne 0 ]; then
+	echo "ERROR: 关键设置未生效，见上面 [check] FAIL 行。上游文件结构可能已变化，请更新 Scripts/Settings.sh。"
+	exit 1
+fi
+echo "all settings verified"

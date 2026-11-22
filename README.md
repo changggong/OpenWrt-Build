@@ -14,7 +14,7 @@ https://github.com/VIKINGYFY/OWRT-Tools.git
 
 https://github.com/VIKINGYFY/packages.git
 
-# OpenWRT-CI
+# OpenWrt-Build
 
 官方版：
 
@@ -44,7 +44,9 @@ https://drive.wrt.moe/uboot/mediatek
 
 # 固件简要说明
 
-固件每天早上5点自动编译。
+固件改为手动触发编译：Actions → QCA-ALL → Run workflow。自动编译已暂停。
+
+冷缓存（缓存为空）时一次编译编不完，第一次会保存工具链缓存并报未完成，再运行一次即可出固件；有缓存时约 3 小时。
 
 固件信息里的时间为编译开始的时间，方便核对上游源码提交时间。
 

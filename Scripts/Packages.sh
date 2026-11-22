@@ -41,8 +41,18 @@ UPDATE_PACKAGE() {
 
 	# 处理克隆的仓库
 	if [[ "$PKG_SPECIAL" == "pkg" ]]; then
-		find $REPO_PATH/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} ./package \;
-		rm -rf $REPO_PATH
+		# 上游一旦改名子包目录，find 会一个都匹配不到，然后 rm -rf 把整个克隆删掉，
+		# 插件静默消失。所以先确认确实匹配到了，再复制。
+		local PKG_MATCHES
+		PKG_MATCHES=$(find "$REPO_PATH"/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune 2>/dev/null)
+		if [ -z "$PKG_MATCHES" ]; then
+			echo "ERROR: $PKG_REPO 里找不到匹配 '$PKG_NAME' 的子包，仓库结构可能已变化"
+			exit 1
+		fi
+		while IFS= read -r DIR; do
+			cp -rf "$DIR" ./package
+		done <<< "$PKG_MATCHES"
+		rm -rf "$REPO_PATH"
 	fi
 }
 
@@ -70,6 +80,12 @@ UPDATE_PACKAGE "passwall2" "Openwrt-Passwall/openwrt-passwall2" "main" "pkg"
 #passwall SSR 协议内核（immortalwrt feeds 里没有这个包，从 passwall 官方包仓库单独抽取）
 UPDATE_PACKAGE "shadowsocksr-libev" "Openwrt-Passwall/openwrt-passwall-packages" "main" "pkg"
 #dae / daed（eBPF 透明代理：dae 内核 + daed 面板 + luci-app-daede 统一管理）
+#注意：immortalwrt feeds 里也有同名 dae(2.0.0) / daed(1.27.0)，会覆盖 kenzok8 的版本，
+#导致 CONFIG_DAE_USE_VMLINUX_BTF / CONFIG_DAED_USE_VMLINUX_BTF 不存在、vmlinux-btf 白编，
+#而且 feeds 版本要求内核开 DEBUG_INFO_BTF（本机 6MiB 内核分区放不下）。
+#这里删掉 feeds 版本及其软链，确保用的是支持独立 vmlinux-btf 的 kenzok8 版本。
+rm -rf ./feeds/packages/net/dae ./feeds/packages/net/daed
+rm -f ./package/feeds/packages/dae ./package/feeds/packages/daed
 UPDATE_PACKAGE "daede" "kenzok8/openwrt-daede" "main"
 #Bandix（eBPF/BTF 流量监控：后端为官方预编译 aarch64 二进制，不需要编 Rust）
 UPDATE_PACKAGE "bandix" "timsaya/openwrt-bandix" "main"
