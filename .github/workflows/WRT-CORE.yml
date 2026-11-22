@@ -97,6 +97,22 @@ jobs:
           sudo -E apt -yqq clean
           sudo -E apt -yqq install dos2unix libfuse-dev dwarves
           sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+
+          #dae/daed 的 BPF 目标由宿主 clang 编译（CONFIG_BPF_TOOLCHAIN_HOST）。
+          #官方 init 脚本只加 LLVM 源、不装 clang/llvm/lld，这里显式补上。
+          sudo -E apt -yqq install clang llvm lld
+          #OpenWrt bpf.mk 用通用名查找 llc/opt/llvm-dis/llvm-strip；
+          #部分 runner 只有带版本后缀的二进制，补通用软链避免二次失败。
+          CLANG_REAL=$(readlink -f "$(command -v clang)")
+          LLVM_BIN_DIR=$(dirname "$CLANG_REAL")
+          if [ -d "$LLVM_BIN_DIR" ]; then
+            for BPF_TOOL in llc opt llvm-dis llvm-strip; do
+              TOOL_PATH=$(command -v "$BPF_TOOL" 2>/dev/null || true)
+              if [ -z "$TOOL_PATH" ] && [ -x "$LLVM_BIN_DIR/$BPF_TOOL" ]; then
+                sudo ln -sf "$LLVM_BIN_DIR/$BPF_TOOL" "/usr/local/bin/$BPF_TOOL"
+              fi
+            done
+          fi
           sudo -E systemctl daemon-reload
           sudo -E timedatectl set-timezone "Asia/Shanghai"
 

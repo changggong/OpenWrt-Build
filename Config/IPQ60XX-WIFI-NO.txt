@@ -17,3 +17,9 @@ CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n
 #超过 re-cs-07 的 6MiB 内核分区（KERNEL_SIZE := 6144k）导致镜像构建失败。
 #BTF 改用独立的 vmlinux-btf 包（见 Config/GENERAL.txt），不占内核分区。
 CONFIG_KERNEL_XDP_SOCKETS=y
+#eBPF 工具链：dae/daed 的 BPF 目标用宿主 clang 编译。
+#必须同时打开 DEVEL——上游 BPF toolchain 是 `choice ... if DEVEL`，
+#不开 DEVEL 时 make defconfig 会丢弃 HOST 选择，导致 CLANG 落到 /invalid/clang。
+#对应上游选择项是 CONFIG_BPF_TOOLCHAIN_HOST（选中后自动 select CONFIG_USE_LLVM_HOST）。
+CONFIG_DEVEL=y
+CONFIG_BPF_TOOLCHAIN_HOST=y
