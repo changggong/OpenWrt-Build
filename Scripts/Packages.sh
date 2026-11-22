@@ -83,10 +83,36 @@ UPDATE_PACKAGE "shadowsocksr-libev" "Openwrt-Passwall/openwrt-passwall-packages"
 #注意：immortalwrt feeds 里也有同名 dae(2.0.0) / daed(1.27.0)，会覆盖 kenzok8 的版本，
 #导致 CONFIG_DAE_USE_VMLINUX_BTF / CONFIG_DAED_USE_VMLINUX_BTF 不存在、vmlinux-btf 白编，
 #而且 feeds 版本要求内核开 DEBUG_INFO_BTF（本机 6MiB 内核分区放不下）。
-#这里删掉 feeds 版本及其软链，确保用的是支持独立 vmlinux-btf 的 kenzok8 版本。
+#这里删掉所有 feeds 的同名包与软链，并借鉴 qca-all-in-one 用 readlink -f 校验实际来源。
 rm -rf ./feeds/packages/net/dae ./feeds/packages/net/daed
-rm -f ./package/feeds/packages/dae ./package/feeds/packages/daed
+#不只删 packages feed：其他 feed 的同名软链同样会覆盖 kenzok8 版本
+for DAE_PKG in dae daed; do
+	find ./package/feeds -maxdepth 2 -type l -name "$DAE_PKG" -print -exec rm -f {} + 2>/dev/null || true
+done
 UPDATE_PACKAGE "daede" "kenzok8/openwrt-daede" "main"
+
+#来源锁校验：确认子包确实来自 kenzok8/openwrt-daede，而不是残留的 feeds 包
+DAE_REPO_PATH="./package/openwrt-daede"
+for DAE_PKG in dae daed luci-app-daede vmlinux-btf; do
+	if [ ! -f "$DAE_REPO_PATH/$DAE_PKG/Makefile" ]; then
+		echo "ERROR: $DAE_REPO_PATH/$DAE_PKG/Makefile 不存在，kenzok8/openwrt-daede 仓库结构可能已变化"
+		exit 1
+	fi
+done
+for DAE_PKG in dae daed; do
+	FOUND_LINK=$(find ./package/feeds -maxdepth 2 -type l -name "$DAE_PKG" -print -quit 2>/dev/null || true)
+	if [ -n "$FOUND_LINK" ]; then
+		REAL_TARGET=$(readlink -f "$FOUND_LINK" 2>/dev/null || echo "")
+		case "$REAL_TARGET" in
+			*openwrt-daede*) ;;
+			*)
+				echo "ERROR: $FOUND_LINK 指向 $REAL_TARGET，可能覆盖 kenzok8 的 $DAE_PKG"
+				exit 1
+				;;
+		esac
+	fi
+done
+echo "[check] dae/daed/luci-app-daede/vmlinux-btf 来源已锁定为 kenzok8/openwrt-daede"
 #Bandix（eBPF/BTF 流量监控：后端为官方预编译 aarch64 二进制，不需要编 Rust）
 UPDATE_PACKAGE "bandix" "timsaya/openwrt-bandix" "main"
 UPDATE_PACKAGE "luci-app-bandix" "timsaya/luci-app-bandix" "main"
