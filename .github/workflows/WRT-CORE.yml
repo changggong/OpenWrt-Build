@@ -72,6 +72,19 @@ jobs:
         #钉住主版本，避免上游 main 的 breaking change 或供应链投毒直接炸掉流水线
         uses: actions/checkout@v4
 
+      - name: Free Disk Space
+        #冷编需要大量磁盘空间；释放 runner 上预装但用不到的 Android / .NET / Haskell / Docker
+        #钉住 commit，避免浮动 main 的供应链风险（借鉴 qca-all-in-one）
+        uses: jlumbroso/free-disk-space@cf1e78c50ca91e757bab3edc229027eebfc07871
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Initialization Environment
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -195,6 +208,25 @@ jobs:
 
           make defconfig -j$(nproc) && make clean -j$(nproc)
 
+      - name: Archive Full Config
+        #TEST 模式把 defconfig 结果落成完整配置存档，便于追踪上游改名/依赖变化
+        if: ${{ inputs.WRT_TEST }}
+        run: |
+          cd ./wrt/
+          echo "========== 完整 .config =========="
+          cat .config
+          echo "========== 完整 .config 结束 =========="
+          mkdir -p ./config-output
+          cp ./.config ./config-output/"$WRT_CONFIG"-"$WRT_INFO"-"$WRT_BRANCH"-"$WRT_DATE"-full.config
+          ls -lh ./config-output/
+
+      - name: Upload Config Artifact
+        if: ${{ inputs.WRT_TEST }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-${{ inputs.WRT_CONFIG }}-${{ github.run_number }}
+          path: ./wrt/config-output/*-full.config
+
       - name: Verify Config
         #defconfig 会静默丢掉上游已改名或不存在的 CONFIG 符号。
         #这里确认关键插件真的进了 .config，避免编出一个缺功能的固件还显示成功。
@@ -252,6 +284,8 @@ jobs:
           cd ./wrt/
 
           make download -j$(nproc)
+          #清理下载不完整的小文件，避免后续编译读取坏包（借鉴 qca-all-in-one）
+          find dl -size -1024c -type f -print -delete
 
       - name: Compile Firmware
         if: ${{ !inputs.WRT_TEST }}
@@ -264,7 +298,7 @@ jobs:
         run: |
           cd ./wrt/
 
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc) || make -j1 || make -j1 V=s
 
       - name: Check Build Output
         id: build-output
