@@ -6,13 +6,12 @@ name: QCA-ALL
 
 #CI计划
 on:
-  #自动编译：已暂停，避免未确认配置就自动开编。
-  #恢复方法：把下面 4 行取消注释即可（Auto-Clean 运行完成后自动编译）
-  #workflow_run:
-  #  workflows: ["Auto-Clean"]
-  #  types:
-  #    - completed
-  #手动编译：只有手动 Run workflow（或确认后由我 dispatch）才会编译
+  #自动编译：Auto-Clean 每天运行完成后自动触发编译（配置已稳定，2026-11-24 恢复）
+  workflow_run:
+    workflows: ["Auto-Clean"]
+    types:
+      - completed
+  #手动编译：也可随时手动 Run workflow 触发
   workflow_dispatch:
     inputs:
       PACKAGE:
